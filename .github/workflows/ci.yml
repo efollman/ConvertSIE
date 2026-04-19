@@ -23,3 +23,6 @@ jobs:
 
       - name: Test
         run: zig build test --summary all
+
+      - name: Cross-compile (linux, macOS, windows)
+        run: zig build cross
