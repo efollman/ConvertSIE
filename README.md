@@ -1,5 +1,7 @@
 # SIEtoHDF5
 
+[![CI](https://github.com/efollman/SIEToHDF5/actions/workflows/ci.yml/badge.svg)](https://github.com/efollman/SIEToHDF5/actions/workflows/ci.yml)
+
 A command-line tool that converts [SIE](https://github.com/efollman/libsie-zig) (Structural Impact Engineering) data files into [HDF5](https://www.hdfgroup.org/solutions/hdf5/) format. Written in Zig, it compiles HDF5 2.1.1 from C source as a static library, producing a fully self-contained binary with no runtime dependency on an installed HDF5 library.
 
 ## Building
