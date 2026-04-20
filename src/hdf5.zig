@@ -11,6 +11,7 @@ pub const Error = error{HDF5Error};
 // Extern globals (only valid after init())
 // ---------------------------------------------------------------------------
 extern var H5T_NATIVE_DOUBLE_g: hid_t;
+extern var H5T_NATIVE_UCHAR_g: hid_t;
 extern var H5T_C_S1_g: hid_t;
 extern var H5P_CLS_DATASET_CREATE_ID_g: hid_t;
 
@@ -55,7 +56,10 @@ extern fn H5Pclose(plist_id: hid_t) herr_t;
 // ---------------------------------------------------------------------------
 // Initialization — must be called before accessing extern globals
 // ---------------------------------------------------------------------------
-var initialized: bool = false;
+// H5open() is idempotent but must be called on every thread that uses HDF5,
+// because HDF5 2.x maintains per-thread API context (VOL wrapper context).
+// Using threadlocal ensures each worker thread calls H5open() exactly once.
+threadlocal var initialized: bool = false;
 
 pub fn init() Error!void {
     if (!initialized) {
@@ -203,6 +207,52 @@ pub fn writeStringAttr(loc_id: hid_t, name: [:0]const u8, value: [:0]const u8) E
     var c_str: [*c]const u8 = @ptrCast(value.ptr);
     if (H5Awrite(attr, str_type, @ptrCast(&c_str)) < 0) return error.HDF5Error;
 }
+
+// ---------------------------------------------------------------------------
+// Chunked 1-D uint8 dataset — for raw binary data (e.g. CAN frame bytes)
+// ---------------------------------------------------------------------------
+pub const ByteDataset = struct {
+    id: hid_t,
+    current_rows: u64,
+
+    pub fn create(parent: hid_t, name: [:0]const u8, chunk_size: u64) Error!ByteDataset {
+        const plist = H5Pcreate(H5P_CLS_DATASET_CREATE_ID_g);
+        if (plist < 0) return error.HDF5Error;
+        defer _ = H5Pclose(plist);
+        const chunk_dims = [_]hsize_t{chunk_size};
+        if (H5Pset_chunk(plist, 1, &chunk_dims) < 0) return error.HDF5Error;
+        const init_dims = [_]hsize_t{0};
+        const max_dims = [_]hsize_t{H5S_UNLIMITED};
+        const space = H5Screate_simple(1, &init_dims, &max_dims);
+        if (space < 0) return error.HDF5Error;
+        defer _ = H5Sclose(space);
+        const did = H5Dcreate2(parent, name.ptr, H5T_NATIVE_UCHAR_g, space, H5P_DEFAULT, plist, H5P_DEFAULT);
+        if (did < 0) return error.HDF5Error;
+        return .{ .id = did, .current_rows = 0 };
+    }
+
+    pub fn appendRows(self: *ByteDataset, data: []const u8) Error!void {
+        if (data.len == 0) return;
+        const new_total = self.current_rows + data.len;
+        const new_dims = [_]hsize_t{new_total};
+        if (H5Dset_extent(self.id, &new_dims) < 0) return error.HDF5Error;
+        const file_space = H5Dget_space(self.id);
+        if (file_space < 0) return error.HDF5Error;
+        defer _ = H5Sclose(file_space);
+        const start = [_]hsize_t{self.current_rows};
+        const count = [_]hsize_t{data.len};
+        if (H5Sselect_hyperslab(file_space, H5S_SELECT_SET, &start, null, &count, null) < 0) return error.HDF5Error;
+        const mem_space = H5Screate_simple(1, &count, null);
+        if (mem_space < 0) return error.HDF5Error;
+        defer _ = H5Sclose(mem_space);
+        if (H5Dwrite(self.id, H5T_NATIVE_UCHAR_g, mem_space, file_space, H5P_DEFAULT, @ptrCast(data.ptr)) < 0) return error.HDF5Error;
+        self.current_rows = new_total;
+    }
+
+    pub fn close(self: ByteDataset) void {
+        _ = H5Dclose(self.id);
+    }
+};
 
 /// Write a scalar f64 attribute.
 pub fn writeDoubleAttr(loc_id: hid_t, name: [:0]const u8, value: f64) Error!void {

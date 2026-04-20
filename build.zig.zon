@@ -1,7 +1,7 @@
 .{
-    .name = .SIEtoHDF5,
-    .version = "0.1.0",
-    .fingerprint = 0xdf453c20c50b8097, // Changing this has security and trust implications.
+    .name = .ExportSIE,
+    .version = "0.2.0",
+    .fingerprint = 0x36cbe0b974eabf39, // Changing this has security and trust implications.
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .libsie = .{
@@ -11,6 +11,11 @@
         .hdf5 = .{
             .url = "https://github.com/HDFGroup/hdf5/archive/refs/tags/2.1.1.tar.gz",
             .hash = "N-V-__8AAEJlCw6diB9w3mfIldAS5c2K-8vKwhIkeCAagIgi",
+        },
+        .raylib_zig = .{
+            .url = "git+https://github.com/raylib-zig/raylib-zig#7d4761b878f43671024ce197f721827b5355a67e",
+            .hash = "raylib_zig-5.6.0-dev-KE8REGlNBQDR7NML06VBtT7gP3VZNY70E5WohAxzqrNn",
+            .lazy = true,
         },
     },
     .paths = .{

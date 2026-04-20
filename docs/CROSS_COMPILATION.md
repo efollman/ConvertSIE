@@ -1,6 +1,6 @@
 # Cross-Compilation
 
-SIEtoHDF5 supports cross-compilation for five target platforms from any host that has Zig 0.15.2 installed. The Zig build system handles all cross-compilation automatically — no separate toolchains or sysroots are required.
+ExportSIE supports cross-compilation for five target platforms from any host that has Zig 0.15.2 installed. The Zig build system handles all cross-compilation automatically — no separate toolchains or sysroots are required.
 
 ## Supported Targets
 
@@ -19,11 +19,11 @@ SIEtoHDF5 supports cross-compilation for five target platforms from any host tha
 zig build cross
 
 # Output binaries are placed in:
-#   zig-out/linux-x86_64/sie2hdf5
-#   zig-out/linux-aarch64/sie2hdf5
-#   zig-out/windows-x86_64/sie2hdf5.exe
-#   zig-out/macos-x86_64/sie2hdf5
-#   zig-out/macos-aarch64/sie2hdf5
+#   zig-out/linux-x86_64/exportsie
+#   zig-out/linux-aarch64/exportsie
+#   zig-out/windows-x86_64/exportsie.exe
+#   zig-out/macos-x86_64/exportsie
+#   zig-out/macos-aarch64/exportsie
 ```
 
 ## How It Works

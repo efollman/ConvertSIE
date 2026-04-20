@@ -12,17 +12,15 @@ pub fn build(b: *std.Build) void {
     });
     const hdf5_dep = b.dependency("hdf5", .{});
 
-    // libsie-zig uses createModule (not addModule), so we build the module
-    // from its source directly.
     const libsie_mod = b.createModule(.{
         .root_source_file = libsie_dep.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // --- Library module ---
+    // --- Library module (ExportSIE) ---
 
-    const lib_mod = b.addModule("SIEtoHDF5", .{
+    const lib_mod = b.addModule("ExportSIE", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -34,16 +32,16 @@ pub fn build(b: *std.Build) void {
 
     const hdf5_native = buildHdf5Lib(b, hdf5_dep, target, optimize);
 
-    // --- Executable ---
+    // --- CLI Executable ---
 
     const exe = b.addExecutable(.{
-        .name = "sie2hdf5",
+        .name = "exportsie",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "SIEtoHDF5", .module = lib_mod },
+                .{ .name = "ExportSIE", .module = lib_mod },
                 .{ .name = "libsie", .module = libsie_mod },
             },
         }),
@@ -52,6 +50,50 @@ pub fn build(b: *std.Build) void {
     exe.root_module.link_libc = true;
 
     b.installArtifact(exe);
+
+    // Install the trimmed-down README and LICENSE alongside the binaries
+    // so distributions always include usage info and license text.
+    b.getInstallStep().dependOn(&b.addInstallFile(b.path("dist/README.md"), "README.md").step);
+    b.getInstallStep().dependOn(&b.addInstallFile(b.path("LICENSE"), "LICENSE").step);
+
+    // --- GUI Executable (Windows only) ---
+
+    if (target.result.os.tag == .windows) {
+        const raylib_dep = b.lazyDependency("raylib_zig", .{
+            .target = target,
+            .optimize = optimize,
+        }) orelse return;
+        const raylib_mod = raylib_dep.module("raylib");
+        const raygui_mod = raylib_dep.module("raygui");
+        const raylib_artifact = raylib_dep.artifact("raylib");
+
+        const gui_mod = b.createModule(.{
+            .root_source_file = b.path("src/gui.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ExportSIE", .module = lib_mod },
+                .{ .name = "libsie", .module = libsie_mod },
+                .{ .name = "raylib", .module = raylib_mod },
+                .{ .name = "raygui", .module = raygui_mod },
+            },
+        });
+        gui_mod.linkLibrary(raylib_artifact);
+        gui_mod.linkLibrary(hdf5_native);
+        gui_mod.link_libc = true;
+
+        const gui_exe = b.addExecutable(.{
+            .name = "exportsie-gui",
+            .root_module = gui_mod,
+        });
+        b.installArtifact(gui_exe);
+
+        // GUI run step
+        const gui_run_cmd = b.addRunArtifact(gui_exe);
+        gui_run_cmd.step.dependOn(b.getInstallStep());
+        const gui_run_step = b.step("run-gui", "Run the GUI application");
+        gui_run_step.dependOn(&gui_run_cmd.step);
+    }
 
     // --- Run step ---
 
@@ -79,23 +121,30 @@ pub fn build(b: *std.Build) void {
         });
         const hdf5_cross = buildHdf5Lib(b, hdf5_dep, cross_target, optimize);
         const cross_exe = b.addExecutable(.{
-            .name = "sie2hdf5",
+            .name = "exportsie",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/main.zig"),
                 .target = cross_target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "SIEtoHDF5", .module = lib_mod },
+                    .{ .name = "ExportSIE", .module = lib_mod },
                     .{ .name = "libsie", .module = libsie_mod },
                 },
             }),
         });
         cross_exe.root_module.linkLibrary(hdf5_cross);
         cross_exe.root_module.link_libc = true;
+        const dest_subdir = @tagName(platform.os) ++ "-" ++ @tagName(platform.arch);
         const cross_install = b.addInstallArtifact(cross_exe, .{
-            .dest_dir = .{ .override = .{ .custom = @tagName(platform.os) ++ "-" ++ @tagName(platform.arch) } },
+            .dest_dir = .{ .override = .{ .custom = dest_subdir } },
         });
         cross_step.dependOn(&cross_install.step);
+
+        // Ship README + LICENSE in each cross-compiled distribution folder.
+        const readme_install = b.addInstallFile(b.path("dist/README.md"), dest_subdir ++ "/README.md");
+        const license_install = b.addInstallFile(b.path("LICENSE"), dest_subdir ++ "/LICENSE");
+        cross_step.dependOn(&readme_install.step);
+        cross_step.dependOn(&license_install.step);
     }
 
     // --- Tests ---
@@ -119,7 +168,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "SIEtoHDF5", .module = lib_mod },
+            .{ .name = "ExportSIE", .module = lib_mod },
             .{ .name = "libsie", .module = libsie_mod },
         },
     });
