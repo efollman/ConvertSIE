@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .libsie = .{
-            .url = "git+https://github.com/efollman/libsie-zig.git#331f2dc15fb6823982f9ea3f50e60a1953372d69",
-            .hash = "N-V-__8AABtBegDMUhFbtT6JS3-8uQI2CpuJbwzYLHXxfW5h",
+            .url = "git+https://github.com/efollman/libsie-z?ref=v0.1.0#bc9ad8b28a6e672a018a5b43376422eb245c5d5f",
+            .hash = "libsie-0.1.0-WJ6vTPJrCQCeiQ6oqJIJMKRxutd3R9CPxeWQcu0w4GdO",
         },
         .hdf5 = .{
             .url = "https://github.com/HDFGroup/hdf5/archive/refs/tags/2.1.1.tar.gz",
