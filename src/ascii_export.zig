@@ -15,7 +15,7 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
     var w = out_file.writer(&write_buf);
 
     // ── File summary ──────────────────────────────────────────────────────
-    try w.interface.print("ExportSIE — SIE file export\n\n", .{});
+    try w.interface.print("ConvertSIE — SIE file export\n\n", .{});
     try w.interface.print("File: {s}\n\n", .{input_path});
 
     // ── File-level tags ───────────────────────────────────────────────────

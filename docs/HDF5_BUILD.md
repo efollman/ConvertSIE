@@ -1,6 +1,6 @@
 # HDF5 Build — Static Linking from Source
 
-This document explains how HDF5 2.1.1 is compiled from C source and statically linked into the `sie2hdf5` binary using the Zig build system. The goal is **full portability** — the resulting binary has zero runtime dependency on an installed HDF5 library.
+This document explains how HDF5 2.1.1 is compiled from C source and statically linked into the `convertsie` binary using the Zig build system. The goal is **full portability** — the resulting binary has zero runtime dependency on an installed HDF5 library.
 
 ## Overview
 

@@ -1,8 +1,8 @@
-# ExportSIE
+# ConvertSIE
 
-[![CI](https://github.com/efollman/ExportSIE/actions/workflows/ci.yml/badge.svg)](https://github.com/efollman/ExportSIE/actions/workflows/ci.yml)
+[![CI](https://github.com/efollman/ConvertSIE/actions/workflows/ci.yml/badge.svg)](https://github.com/efollman/ConvertSIE/actions/workflows/ci.yml)
 
-A command-line tool (and Windows GUI) that exports [SIE](https://github.com/efollman/libsie-zig) data files into multiple output formats. Written in Zig, it compiles HDF5 from C source as a static library, producing fully self-contained binaries with no runtime dependencies.
+A command-line tool (and Windows GUI) that converts [SIE](https://github.com/efollman/libsie-zig) data files into multiple output formats. Written in Zig, it compiles HDF5 from C source as a static library, producing fully self-contained binaries with no runtime dependencies.
 
 ## Supported Output Formats
 
@@ -12,6 +12,8 @@ A command-line tool (and Windows GUI) that exports [SIE](https://github.com/efol
 | `.txt` | ASCII | Human-readable text with metadata tags and tab-separated channel data |
 | `.csv` | CSV | Comma-separated values with channels as side-by-side tables |
 | `.xlsx` | Excel | Excel 2007+ spreadsheet with the same layout as CSV |
+| `.asc` | Vector-style ASCII | Vector CANalyzer-compatible log; filters to raw CAN channels only |
+| `.csv` (with `--can-err`) | J1939 CAN Errors | DM1 active-DTC extraction from raw CAN channels, CSV output |
 
 ## Building
 
@@ -37,26 +39,38 @@ zig build run-gui
 ### CLI
 
 ```
-exportsie <input.sie> <output.[h5|txt|csv|xlsx]>
+convertsie [--vector-asc | --can-err] <input.sie> <output.[h5|txt|csv|xlsx|asc]>
 ```
 
-The output format is determined automatically from the file extension:
+The output format is normally determined from the file extension. The two force
+flags override extension dispatch when a CSV/ASCII extension is ambiguous:
+
+- `--vector-asc` — write a Vector-style CAN ASCII log (`.asc`). Only raw CAN
+  channels are emitted; other channels are skipped.
+- `--can-err` — extract J1939 DM1 active DTCs from raw CAN channels and write
+  a CSV. Non-CAN files produce no output.
 
 ```bash
-exportsie recording.sie recording.h5      # HDF5 export
-exportsie recording.sie recording.txt     # ASCII text export
-exportsie recording.sie recording.csv     # CSV export
-exportsie recording.sie recording.xlsx    # Excel export
+convertsie recording.sie recording.h5                 # HDF5 export
+convertsie recording.sie recording.txt                # ASCII text export
+convertsie recording.sie recording.csv                # CSV export
+convertsie recording.sie recording.xlsx               # Excel export
+convertsie recording.sie recording.asc                # Vector-style CAN ASCII
+convertsie --can-err recording.sie CANErr-recording.csv   # J1939 DM1 errors
 ```
 
 ### GUI (Windows only)
 
-Run `exportsie-gui.exe` or `zig build run-gui`. The GUI provides:
+Run `convertsie-gui.exe` or `zig build run-gui`. The GUI provides:
 
 - Drag-and-drop or browse for `.sie` files
-- Output file selection with format support for all four export types
+- Six output-format checkboxes: **H5**, **TXT**, **CSV**, **XLSX**,
+  **Vector Style ASCII (CAN only)**, **J1939 CAN Errors (CSV)**
+- Automatic output filename generation (`Vector-<name>.asc`,
+  `CANErr-<name>.csv`, etc.)
+- Persisted format selections in `%APPDATA%\ConvertSIE\config.bin`
 - Automatic Windows light/dark theme detection
-- Export status display
+- Opt-in debug console (bottom-right "debug console" link) with UTF-8 I/O
 
 ### HDF5 Output Hierarchy
 
@@ -102,12 +116,27 @@ Time(S), dim1,      dim1,         , Time(S), dim1
 The XLSX export additionally splits across multiple sheets when row count
 exceeds Excel's 1,048,576-row limit.
 
+### Vector-Style ASCII (`.asc`)
+
+CAN-only export compatible with Vector CANalyzer log readers. Each raw CAN
+channel becomes a stream of timestamped frame records. Non-CAN channels are
+skipped entirely; if a file contains no CAN channels, no output file is
+created.
+
+### J1939 CAN Errors (`--can-err`)
+
+Scans raw CAN channels for J1939 DM1 (PGN 0xFECA) messages and extracts active
+diagnostic trouble codes (SPN/FMI/OC). Produces a CSV with one row per DTC
+occurrence. Multi-channel inputs yield a single combined CSV with a channel
+column. Ported from
+[CanErrFindr-Zig](https://github.com/efollman/CanErrFindr-Zig) (MIT).
+
 ## Dependencies
 
 | Dependency | Source | Purpose |
 |---|---|---|
 | **HDF5 2.1.1** | [HDFGroup/hdf5 tarball](https://github.com/HDFGroup/hdf5/archive/refs/tags/2.1.1.tar.gz) | Hierarchical data format library (compiled from C source) |
-| **libsie-zig** | [efollman/libsie-zig](https://github.com/efollman/libsie-zig) (git, commit `331f2dc`) | SIE file parser |
+| **libsie-zig** | [efollman/libsie-zig](https://github.com/efollman/libsie-zig) | SIE file parser |
 | **raylib-zig** | [raylib-zig/raylib-zig](https://github.com/raylib-zig/raylib-zig) (lazy, Windows GUI only) | GUI framework with raygui |
 
 All dependencies are declared in `build.zig.zon` and fetched automatically by the Zig build system. The raylib dependency is lazy and only fetched when building the GUI on Windows.
@@ -118,25 +147,25 @@ The build system supports cross-compilation for five targets from any host with 
 
 | Target | CLI Output Path |
 |---|---|
-| `x86_64-linux` | `zig-out/linux-x86_64/exportsie` |
-| `aarch64-linux` | `zig-out/linux-aarch64/exportsie` |
-| `x86_64-windows` | `zig-out/windows-x86_64/exportsie.exe` |
-| `x86_64-macos` | `zig-out/macos-x86_64/exportsie` |
-| `aarch64-macos` | `zig-out/macos-aarch64/exportsie` |
+| `x86_64-linux` | `zig-out/linux-x86_64/convertsie` |
+| `aarch64-linux` | `zig-out/linux-aarch64/convertsie` |
+| `x86_64-windows` | `zig-out/windows-x86_64/convertsie.exe` |
+| `x86_64-macos` | `zig-out/macos-x86_64/convertsie` |
+| `aarch64-macos` | `zig-out/macos-aarch64/convertsie` |
 
-The GUI (`exportsie-gui.exe`) is built automatically alongside the CLI when targeting Windows.
+The GUI (`convertsie-gui.exe`) is built automatically alongside the CLI when targeting Windows.
 
 ## Project Structure
 
 ```
-ExportSIE/
+ConvertSIE/
 ├── build.zig                 Build system configuration
 ├── build.zig.zon             Package manifest and dependencies
 ├── hdf5_config/              Custom HDF5 build configuration
 │   ├── H5pubconf.h           Cross-platform config header
 │   └── H5build_settings.c    Stub for H5build_settings[] symbol
 ├── src/
-│   ├── main.zig              CLI entry point (dispatches by output extension)
+│   ├── main.zig              CLI entry point (dispatches by extension / flag)
 │   ├── gui.zig               Windows GUI application (raylib/raygui)
 │   ├── root.zig              Library module — re-exports all exporters
 │   ├── common.zig            Shared SIE reading and data structures
@@ -144,7 +173,10 @@ ExportSIE/
 │   ├── hdf5_export.zig       HDF5 export implementation
 │   ├── ascii_export.zig      ASCII text export implementation
 │   ├── csv_export.zig        CSV export implementation
-│   └── xlsx_export.zig       XLSX export implementation (pure Zig, no external deps)
+│   ├── xlsx_export.zig       XLSX export implementation (pure Zig)
+│   ├── vector_asc_export.zig Vector-style CAN ASCII export
+│   ├── can_err.zig           J1939 DM1 DTC parser (ported from CanErrFindr-Zig)
+│   └── can_err_export.zig    SIE→CANErr CSV wrapper
 ├── test/
 │   └── data/                 SIE test files
 └── docs/
@@ -163,8 +195,8 @@ Evan Follman
 
 ## Source Code
 
-https://github.com/efollman/ExportSIE
+https://github.com/efollman/ConvertSIE
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details. The J1939 DM1 parser in `src/can_err.zig` is adapted from [CanErrFindr-Zig](https://github.com/efollman/CanErrFindr-Zig) (also MIT).

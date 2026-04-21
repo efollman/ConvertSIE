@@ -1,7 +1,7 @@
 .{
-    .name = .ExportSIE,
+    .name = .ConvertSIE,
     .version = "0.2.0",
-    .fingerprint = 0x36cbe0b974eabf39, // Changing this has security and trust implications.
+    .fingerprint = 0x2985060fff620858, // Changing this has security and trust implications.
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .libsie = .{

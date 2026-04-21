@@ -1,9 +1,9 @@
-/// Windows-only GUI for ExportSIE — built with raylib / raygui.
+/// Windows-only GUI for ConvertSIE — built with raylib / raygui.
 /// Provides file selection, output format, theme detection, and export status.
 const std = @import("std");
 const rl = @import("raylib");
 const rg = @import("raygui");
-const ExportSIE = @import("ExportSIE");
+const ConvertSIE = @import("ConvertSIE");
 
 // ── Win32 API for native file dialogs ─────────────────────────────────────
 const OPENFILENAMEA = extern struct {
@@ -35,6 +35,11 @@ const OPENFILENAMEA = extern struct {
 extern "comdlg32" fn GetOpenFileNameA(lpofn: *OPENFILENAMEA) c_int;
 extern "ole32" fn CoInitializeEx(pvReserved: ?*anyopaque, dwCoInit: u32) i32;
 extern "kernel32" fn SetConsoleOutputCP(wCodePageID: c_uint) c_int;
+extern "kernel32" fn SetConsoleCP(wCodePageID: c_uint) c_int;
+extern "kernel32" fn AllocConsole() c_int;
+extern "kernel32" fn FreeConsole() c_int;
+extern "kernel32" fn GetConsoleWindow() ?*anyopaque;
+extern "kernel32" fn SetConsoleTitleW(lpConsoleTitle: [*:0]const u16) c_int;
 extern "advapi32" fn RegGetValueA(
     hkey: usize,
     lpSubKey: [*:0]const u8,
@@ -47,6 +52,59 @@ extern "advapi32" fn RegGetValueA(
 
 const HKEY_CURRENT_USER: usize = 0x80000001;
 const RRF_RT_REG_DWORD: u32 = 0x00000010;
+
+// ── Debug console (opt-in, opened from the GUI) ────────────────────────────
+
+/// Tracks whether we have allocated a debug console for this process.
+var debug_console_open: bool = false;
+
+// C stdio reopening so that prints from libc / linked C libraries (raylib,
+// HDF5, …) are also routed to the on-demand debug console with UTF-8 output.
+// We avoid @cImport on <stdio.h> because the MSVC CRT exposes stdin/stdout/
+// stderr as macros that call __acrt_iob_func at runtime (not comptime).
+extern "c" fn freopen(
+    filename: [*:0]const u8,
+    mode: [*:0]const u8,
+    stream: ?*anyopaque,
+) ?*anyopaque;
+extern "c" fn __acrt_iob_func(ix: c_uint) ?*anyopaque;
+
+/// Allocate (or free) a Win32 console attached to this GUI process. Because
+/// the executable is built with the Windows subsystem, no console is created
+/// at startup; this is invoked from the small "debug console" link in the
+/// bottom-right corner of the window.
+///
+/// The console is configured for UTF-8 on both input and output so that
+/// non-ASCII characters (paths, log messages, etc.) render correctly.
+fn toggleDebugConsole() void {
+    if (debug_console_open) {
+        _ = FreeConsole();
+        debug_console_open = false;
+        return;
+    }
+    if (AllocConsole() != 0) {
+        // Code page 65001 = UTF-8. Set both input and output so that
+        // ReadConsoleA / WriteConsoleA and the C stdio narrow APIs operate
+        // on UTF-8 byte sequences.
+        _ = SetConsoleOutputCP(65001);
+        _ = SetConsoleCP(65001);
+
+        // Title: use the wide-char API so the em-dash renders correctly
+        // regardless of the system ANSI code page.
+        const title_w = std.unicode.utf8ToUtf16LeStringLiteral("ConvertSIE — Debug Console");
+        _ = SetConsoleTitleW(title_w);
+
+        // Re-bind C stdio streams to the freshly created console so that
+        // any printf/fprintf calls from the linked C libraries (raylib,
+        // HDF5) appear there too. AllocConsole already updated the Win32
+        // standard handles, so std.debug.print works without extra setup.
+        _ = freopen("CONOUT$", "w", __acrt_iob_func(1));
+        _ = freopen("CONOUT$", "w", __acrt_iob_func(2));
+        _ = freopen("CONIN$", "r", __acrt_iob_func(0));
+
+        debug_console_open = true;
+    }
+}
 
 // ── Theme ─────────────────────────────────────────────────────────────────
 
@@ -179,12 +237,18 @@ const MAX_VISIBLE_FILES_SOFT: usize = 10; // soft cap for *initial* auto-sized w
 // + 12 (gap below list)
 // + 22 ("Output Folder" label) + FIELD_H + 16 (output box row + spacing)
 // + (FIELD_H + 8) + 16 (Export All button + spacing)
-// + 22 ("Formats" label) + 18 (checkbox row, cb_size) + 16 (spacing)
+// + 22 ("Formats" label) + 18 (4-wide checkbox row, cb_size) + 8 (spacing)
+// + 18 + 8 (Vector ASC row) + 18 + 16 (CAN-error row)
 // + 8  (bottom margin)
-const NON_LIST_FIXED_H: f32 = PAD + 22 + 12 + 22 + FIELD_H + 16 + (FIELD_H + 8) + 16 + 22 + 18 + 8 + 18 + 16 + 8;
+const NON_LIST_FIXED_H: f32 = PAD + 22 + 12 + 22 + FIELD_H + 16 + (FIELD_H + 8) + 16 + 22 + 18 + 8 + 18 + 8 + 18 + 16 + 8;
 
 // Output extensions in the same order as FORMAT_SHORT.
-const FORMAT_EXTS = [_][]const u8{ ".h5", ".txt", ".csv", ".xlsx", ".asc" };
+const FORMAT_EXTS = [_][]const u8{ ".h5", ".txt", ".csv", ".xlsx", ".asc", ".csv" };
+
+// Optional filename prefix per format (e.g. "Vector-" / "CANErr-"). Empty
+// string means no prefix. Prefixes keep CAN-only outputs from colliding with
+// the basic CSV / ASCII exports when both are selected for the same input.
+const FORMAT_PREFIX = [_][]const u8{ "", "", "", "", "Vector-", "CANErr-" };
 
 // ── Application state ─────────────────────────────────────────────────────
 
@@ -197,11 +261,11 @@ const FileResult = struct {
     message_len: usize = 0,
 };
 
-const NUM_FORMATS: usize = 5;
+const NUM_FORMATS: usize = 6;
 /// Short labels shown in per-format status badges.
-const FORMAT_SHORT = [_][:0]const u8{ "H5", "TXT", "CSV", "XLSX", "ASC" };
+const FORMAT_SHORT = [_][:0]const u8{ "H5", "TXT", "CSV", "XLSX", "ASC", "CANErr" };
 /// Long labels shown next to format checkboxes.
-const FORMAT_LABEL = [_][:0]const u8{ "H5", "TXT", "CSV", "XLSX", "Vector Style ASCII (CAN only)" };
+const FORMAT_LABEL = [_][:0]const u8{ "H5", "TXT", "CSV", "XLSX", "Vector Style ASCII (CAN only)", "J1939 CAN Errors (CSV)" };
 
 /// Per-format task associated with a single input file.
 const FormatTask = struct {
@@ -241,7 +305,7 @@ const AppState = struct {
     /// (0=HDF5, 1=ASCII, 2=CSV, 3=XLSX, 4=Vector ASC).
     /// Default to none selected; the on-disk config restores the user's last
     /// selection at startup (see loadConfig / saveConfig).
-    format_selected: [NUM_FORMATS]bool = .{ false, false, false, false, false },
+    format_selected: [NUM_FORMATS]bool = .{ false, false, false, false, false, false },
     /// Queue of files to export
     files: std.ArrayListUnmanaged(FileItem) = .{},
     /// Scroll offset (pixels) for the file queue list.
@@ -337,7 +401,6 @@ const AppState = struct {
 // ── Entry point ───────────────────────────────────────────────────────────
 
 pub fn main() !void {
-    _ = SetConsoleOutputCP(65001);
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -345,7 +408,7 @@ pub fn main() !void {
     // Request 4x MSAA before window creation so line / circle / triangle
     // primitives (spinner, check mark, scrollbar) have smoother edges.
     rl.setConfigFlags(.{ .msaa_4x_hint = true, .window_resizable = true });
-    rl.initWindow(WINDOW_W, WINDOW_H_MIN, "ExportSIE");
+    rl.initWindow(WINDOW_W, WINDOW_H_MIN, "ConvertSIE");
     defer rl.closeWindow();
     rl.setWindowMinSize(WINDOW_W, WINDOW_H_MIN);
     rl.setWindowState(.{ .window_resizable = true });
@@ -710,9 +773,39 @@ pub fn main() !void {
             _ = rg.checkBox(rl.Rectangle.init(cx, y, cb_size, cb_size), FORMAT_LABEL[fmt_i], &app.format_selected[fmt_i]);
         }
         y += cb_size + 8;
-        // Vector ASC gets its own row because the label is long.
+        // Long-labelled CAN-only formats each get their own row.
         _ = rg.checkBox(rl.Rectangle.init(PAD, y, cb_size, cb_size), FORMAT_LABEL[4], &app.format_selected[4]);
+        y += cb_size + 8;
+        _ = rg.checkBox(rl.Rectangle.init(PAD, y, cb_size, cb_size), FORMAT_LABEL[5], &app.format_selected[5]);
         y += cb_size + 16;
+
+        // ── Debug-console toggle link (bottom-right corner) ──────────
+        {
+            const link_text: [:0]const u8 = if (debug_console_open)
+                "hide debug console"
+            else
+                "show debug console";
+            const link_size: f32 = 11;
+            const link_tw = measureFont(app.font_loaded, app.font, link_text, link_size);
+            const link_h: i32 = 14;
+            const margin: i32 = 6;
+            const cur_h_link = rl.getScreenHeight();
+            const link_x: i32 = win_w - link_tw - margin;
+            const link_y: i32 = cur_h_link - link_h - margin;
+            const link_rect = rl.Rectangle.init(
+                @floatFromInt(link_x - 2),
+                @floatFromInt(link_y - 1),
+                @floatFromInt(link_tw + 4),
+                @floatFromInt(link_h + 2),
+            );
+            const hovered = rl.checkCollisionPointRec(rl.getMousePosition(), link_rect);
+            const link_color = if (hovered) theme.status_running else theme.hint;
+            drawFont(app.font_loaded, app.font, link_text, link_x, link_y, link_size, link_color);
+            if (hovered) {
+                rl.setMouseCursor(.pointing_hand);
+                if (rl.isMouseButtonPressed(.left)) toggleDebugConsole();
+            }
+        }
 
         // ── Window auto-fit ───────────────────────────────────────────
         // Detect manual resize: any height delta we didn't program.
@@ -779,25 +872,29 @@ fn formatExportWorker(job: *FormatExportJob) void {
     defer job.allocator.free(out_z);
 
     switch (job.format_idx) {
-        0 => ExportSIE.hdf5_export.convert(job.allocator, in_z, out_z) catch |err| {
+        0 => ConvertSIE.hdf5_export.convert(job.allocator, in_z, out_z) catch |err| {
             result.success = false;
             result.message_len = (std.fmt.bufPrint(&result.message, "HDF5: {}", .{err}) catch "").len;
         },
-        1 => ExportSIE.ascii_export.convert(job.allocator, in_z, out_z) catch |err| {
+        1 => ConvertSIE.ascii_export.convert(job.allocator, in_z, out_z) catch |err| {
             result.success = false;
             result.message_len = (std.fmt.bufPrint(&result.message, "ASCII: {}", .{err}) catch "").len;
         },
-        2 => ExportSIE.csv_export.convert(job.allocator, in_z, out_z) catch |err| {
+        2 => ConvertSIE.csv_export.convert(job.allocator, in_z, out_z) catch |err| {
             result.success = false;
             result.message_len = (std.fmt.bufPrint(&result.message, "CSV: {}", .{err}) catch "").len;
         },
-        3 => ExportSIE.xlsx_export.convert(job.allocator, in_z, out_z) catch |err| {
+        3 => ConvertSIE.xlsx_export.convert(job.allocator, in_z, out_z) catch |err| {
             result.success = false;
             result.message_len = (std.fmt.bufPrint(&result.message, "XLSX: {}", .{err}) catch "").len;
         },
-        4 => ExportSIE.vector_asc_export.convert(job.allocator, in_z, out_z) catch |err| {
+        4 => ConvertSIE.vector_asc_export.convert(job.allocator, in_z, out_z) catch |err| {
             result.success = false;
             result.message_len = (std.fmt.bufPrint(&result.message, "ASC: {}", .{err}) catch "").len;
+        },
+        5 => ConvertSIE.can_err_export.convert(job.allocator, in_z, out_z) catch |err| {
+            result.success = false;
+            result.message_len = (std.fmt.bufPrint(&result.message, "CANErr: {}", .{err}) catch "").len;
         },
         else => {
             result.success = false;
@@ -809,9 +906,9 @@ fn formatExportWorker(job: *FormatExportJob) void {
     job.task.done.store(true, .release);
 }
 
-/// Build an output path: out_dir/stem.ext, where ext is selected by format_idx.
-/// Vector ASC outputs are prefixed with "Vector-" so they don't collide with
-/// the basic ASCII export when both formats are selected.
+/// Build an output path: out_dir/<prefix><stem><ext>, where ext / prefix are
+/// selected by format_idx (see FORMAT_EXTS / FORMAT_PREFIX). Prefixes keep
+/// CAN-only outputs from colliding with the basic CSV / ASCII exports.
 fn buildOutPath(allocator: std.mem.Allocator, in_path: []const u8, out_dir: []const u8, format_idx: usize) ?[]u8 {
     const sep_idx = std.mem.lastIndexOfAny(u8, in_path, "/\\") orelse 0;
     const filename = if (sep_idx > 0) in_path[sep_idx + 1 ..] else in_path;
@@ -819,7 +916,7 @@ fn buildOutPath(allocator: std.mem.Allocator, in_path: []const u8, out_dir: []co
     const stem = filename[0..dot_idx];
     const ext = FORMAT_EXTS[format_idx];
     const dir = std.mem.trimRight(u8, out_dir, "/\\");
-    const prefix: []const u8 = if (format_idx == 4) "Vector-" else "";
+    const prefix = FORMAT_PREFIX[format_idx];
     return std.fmt.allocPrint(allocator, "{s}\\{s}{s}{s}", .{ dir, prefix, stem, ext }) catch null;
 }
 
@@ -1213,10 +1310,10 @@ fn browseFolderLegacy(allocator: std.mem.Allocator) ?[]const u8 {
 
 // ── Drawing helpers ───────────────────────────────────────────────────────
 
-/// Load persisted format-selection state from `%APPDATA%\ExportSIE\config.bin`.
+/// Load persisted format-selection state from `%APPDATA%\ConvertSIE\config.bin`.
 /// Silent on any error — the GUI just starts with the default (none selected).
 fn loadConfig(app: *AppState) void {
-    const dir = std.fs.getAppDataDir(app.allocator, "ExportSIE") catch return;
+    const dir = std.fs.getAppDataDir(app.allocator, "ConvertSIE") catch return;
     defer app.allocator.free(dir);
     const path = std.fs.path.join(app.allocator, &.{ dir, "config.bin" }) catch return;
     defer app.allocator.free(path);
@@ -1231,7 +1328,7 @@ fn loadConfig(app: *AppState) void {
 /// Persist the current format-selection state. Best-effort; failures are
 /// swallowed because losing the preference is not worth crashing on shutdown.
 fn saveConfig(app: *AppState) void {
-    const dir = std.fs.getAppDataDir(app.allocator, "ExportSIE") catch return;
+    const dir = std.fs.getAppDataDir(app.allocator, "ConvertSIE") catch return;
     defer app.allocator.free(dir);
     std.fs.makeDirAbsolute(dir) catch |e| switch (e) {
         error.PathAlreadyExists => {},

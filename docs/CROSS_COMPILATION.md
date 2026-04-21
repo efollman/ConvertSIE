@@ -1,6 +1,6 @@
 # Cross-Compilation
 
-ExportSIE supports cross-compilation for five target platforms from any host that has Zig 0.15.2 installed. The Zig build system handles all cross-compilation automatically — no separate toolchains or sysroots are required.
+ConvertSIE supports cross-compilation for five target platforms from any host that has Zig 0.15.2 installed. The Zig build system handles all cross-compilation automatically — no separate toolchains or sysroots are required.
 
 ## Supported Targets
 
@@ -19,11 +19,11 @@ ExportSIE supports cross-compilation for five target platforms from any host tha
 zig build cross
 
 # Output binaries are placed in:
-#   zig-out/linux-x86_64/exportsie
-#   zig-out/linux-aarch64/exportsie
-#   zig-out/windows-x86_64/exportsie.exe
-#   zig-out/macos-x86_64/exportsie
-#   zig-out/macos-aarch64/exportsie
+#   zig-out/linux-x86_64/convertsie
+#   zig-out/linux-aarch64/convertsie
+#   zig-out/windows-x86_64/convertsie.exe
+#   zig-out/macos-x86_64/convertsie
+#   zig-out/macos-aarch64/convertsie
 ```
 
 ## How It Works
@@ -106,15 +106,15 @@ Cross-compiled binaries are installed to target-specific subdirectories:
 ```
 zig-out/
 ├── linux-x86_64/
-│   └── sie2hdf5
+│   └── convertsie
 ├── linux-aarch64/
-│   └── sie2hdf5
+│   └── convertsie
 ├── windows-x86_64/
-│   └── sie2hdf5.exe
+│   └── convertsie.exe
 ├── macos-x86_64/
-│   └── sie2hdf5
+│   └── convertsie
 └── macos-aarch64/
-    └── sie2hdf5
+    └── convertsie
 ```
 
 This is configured via the `dest_dir` override in `build.zig`:

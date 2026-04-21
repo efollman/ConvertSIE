@@ -18,9 +18,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // --- Library module (ExportSIE) ---
+    // --- Library module (ConvertSIE) ---
 
-    const lib_mod = b.addModule("ExportSIE", .{
+    const lib_mod = b.addModule("ConvertSIE", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -35,13 +35,13 @@ pub fn build(b: *std.Build) void {
     // --- CLI Executable ---
 
     const exe = b.addExecutable(.{
-        .name = "exportsie",
+        .name = "convertsie",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "ExportSIE", .module = lib_mod },
+                .{ .name = "ConvertSIE", .module = lib_mod },
                 .{ .name = "libsie", .module = libsie_mod },
             },
         }),
@@ -72,7 +72,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "ExportSIE", .module = lib_mod },
+                .{ .name = "ConvertSIE", .module = lib_mod },
                 .{ .name = "libsie", .module = libsie_mod },
                 .{ .name = "raylib", .module = raylib_mod },
                 .{ .name = "raygui", .module = raygui_mod },
@@ -83,9 +83,12 @@ pub fn build(b: *std.Build) void {
         gui_mod.link_libc = true;
 
         const gui_exe = b.addExecutable(.{
-            .name = "exportsie-gui",
+            .name = "convertsie-gui",
             .root_module = gui_mod,
         });
+        // Windows subsystem so launching the GUI does not spawn a console
+        // window. A debug console can still be opened on demand from the GUI.
+        gui_exe.subsystem = .Windows;
         b.installArtifact(gui_exe);
 
         // GUI run step
@@ -121,13 +124,13 @@ pub fn build(b: *std.Build) void {
         });
         const hdf5_cross = buildHdf5Lib(b, hdf5_dep, cross_target, optimize);
         const cross_exe = b.addExecutable(.{
-            .name = "exportsie",
+            .name = "convertsie",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/main.zig"),
                 .target = cross_target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "ExportSIE", .module = lib_mod },
+                    .{ .name = "ConvertSIE", .module = lib_mod },
                     .{ .name = "libsie", .module = libsie_mod },
                 },
             }),
@@ -168,7 +171,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "ExportSIE", .module = lib_mod },
+            .{ .name = "ConvertSIE", .module = lib_mod },
             .{ .name = "libsie", .module = libsie_mod },
         },
     });

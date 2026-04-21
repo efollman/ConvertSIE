@@ -1,5 +1,5 @@
 const std = @import("std");
-const ExportSIE = @import("ExportSIE");
+const ConvertSIE = @import("ConvertSIE");
 
 pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
@@ -12,7 +12,11 @@ pub fn main() !void {
     // Parse optional flags. Currently supports `--vector-asc` to force
     // Vector CANalyzer ASCII output (otherwise the format is chosen by the
     // output file extension, and `.txt` produces the basic ASCII dump).
+    // `--can-err` forces the J1939 DM1 CAN error CSV exporter (shares the
+    // `.csv` extension with the normal CSV export, so it must be an explicit
+    // opt-in flag).
     var force_vector_asc = false;
+    var force_can_err = false;
     var positional: [3][:0]const u8 = undefined;
     var npos: usize = 0;
     var i: usize = 1;
@@ -20,6 +24,8 @@ pub fn main() !void {
         const a = args[i];
         if (std.mem.eql(u8, a, "--vector-asc")) {
             force_vector_asc = true;
+        } else if (std.mem.eql(u8, a, "--can-err")) {
+            force_can_err = true;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
             npos = 0; // force usage print
             break;
@@ -35,7 +41,7 @@ pub fn main() !void {
         const stderr = std.fs.File.stderr();
         var buf: [4096]u8 = undefined;
         var w = stderr.writer(&buf);
-        try w.interface.print("Usage: exportsie [--vector-asc] <input.sie> <output.[h5|txt|csv|xlsx|asc]>\n\n", .{});
+        try w.interface.print("Usage: convertsie [--vector-asc | --can-err] <input.sie> <output.[h5|txt|csv|xlsx|asc]>\n\n", .{});
         try w.interface.print("Supported output formats (determined by file extension):\n", .{});
         try w.interface.print("  .h5 / .hdf5  \xe2\x80\x94 HDF5 hierarchical data format\n", .{});
         try w.interface.print("  .txt         \xe2\x80\x94 ASCII text export (tags + tab-separated data)\n", .{});
@@ -44,6 +50,7 @@ pub fn main() !void {
         try w.interface.print("  .asc         \xe2\x80\x94 Vector CANalyzer ASCII (CAN channels only; merged & sorted)\n", .{});
         try w.interface.print("\nFlags:\n", .{});
         try w.interface.print("  --vector-asc  Force Vector ASCII output regardless of extension\n", .{});
+        try w.interface.print("  --can-err     Extract J1939 DM1 CAN error records into a CSV (CAN channels only)\n", .{});
         try w.interface.flush();
         std.process.exit(1);
     }
@@ -54,24 +61,28 @@ pub fn main() !void {
     // Determine export format from output file extension or override flag.
     const ext = extensionOf(output_path);
 
-    if (force_vector_asc or std.ascii.eqlIgnoreCase(ext, ".asc")) {
-        ExportSIE.vector_asc_export.convert(allocator, input_path, output_path) catch |err| {
+    if (force_can_err) {
+        ConvertSIE.can_err_export.convert(allocator, input_path, output_path) catch |err| {
+            return fail("CAN error CSV export failed: {}\n", .{err});
+        };
+    } else if (force_vector_asc or std.ascii.eqlIgnoreCase(ext, ".asc")) {
+        ConvertSIE.vector_asc_export.convert(allocator, input_path, output_path) catch |err| {
             return fail("Vector ASC export failed: {}\n", .{err});
         };
     } else if (std.ascii.eqlIgnoreCase(ext, ".h5") or std.ascii.eqlIgnoreCase(ext, ".hdf5")) {
-        ExportSIE.hdf5_export.convert(allocator, input_path, output_path) catch |err| {
+        ConvertSIE.hdf5_export.convert(allocator, input_path, output_path) catch |err| {
             return fail("HDF5 export failed: {}\n", .{err});
         };
     } else if (std.ascii.eqlIgnoreCase(ext, ".txt")) {
-        ExportSIE.ascii_export.convert(allocator, input_path, output_path) catch |err| {
+        ConvertSIE.ascii_export.convert(allocator, input_path, output_path) catch |err| {
             return fail("ASCII export failed: {}\n", .{err});
         };
     } else if (std.ascii.eqlIgnoreCase(ext, ".csv")) {
-        ExportSIE.csv_export.convert(allocator, input_path, output_path) catch |err| {
+        ConvertSIE.csv_export.convert(allocator, input_path, output_path) catch |err| {
             return fail("CSV export failed: {}\n", .{err});
         };
     } else if (std.ascii.eqlIgnoreCase(ext, ".xlsx")) {
-        ExportSIE.xlsx_export.convert(allocator, input_path, output_path) catch |err| {
+        ConvertSIE.xlsx_export.convert(allocator, input_path, output_path) catch |err| {
             return fail("XLSX export failed: {}\n", .{err});
         };
     } else {
