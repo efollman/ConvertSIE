@@ -12,10 +12,26 @@ pub fn build(b: *std.Build) void {
     });
     const hdf5_dep = b.dependency("hdf5", .{});
 
+    // libxlsxwriter ships its own build.zig that builds zlib + bundled minizip
+    // and exposes an `xlsxwriter` static library artifact. Note: upstream's
+    // `USE_SYSTEM_MINIZIP` option is implemented backwards — setting it true
+    // adds the *bundled* third_party/minizip sources, which `packager.c`
+    // depends on. Without this, the static lib has unresolved zip_* symbols.
+    const libxlsxwriter_dep_native = b.dependency("libxlsxwriter", .{
+        .target = target,
+        .optimize = optimize,
+        .USE_SYSTEM_MINIZIP = true,
+    });
+    const libxlsxwriter_native = libxlsxwriter_dep_native.artifact("xlsxwriter");
+
+    // libsie's build.zig does not expose an addModule, so build it from
+    // its root source. v0.3.x's c_api.zig pulls in std.heap.c_allocator,
+    // so the module must link libc.
     const libsie_mod = b.createModule(.{
         .root_source_file = libsie_dep.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
 
     // --- Library module (ConvertSIE) ---
@@ -47,6 +63,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.linkLibrary(hdf5_native);
+    exe.root_module.linkLibrary(libxlsxwriter_native);
     exe.root_module.link_libc = true;
 
     b.installArtifact(exe);
@@ -80,6 +97,7 @@ pub fn build(b: *std.Build) void {
         });
         gui_mod.linkLibrary(raylib_artifact);
         gui_mod.linkLibrary(hdf5_native);
+        gui_mod.linkLibrary(libxlsxwriter_native);
         gui_mod.link_libc = true;
 
         const gui_exe = b.addExecutable(.{
@@ -123,6 +141,12 @@ pub fn build(b: *std.Build) void {
             .cpu_arch = platform.arch,
         });
         const hdf5_cross = buildHdf5Lib(b, hdf5_dep, cross_target, optimize);
+        const libxlsxwriter_dep_cross = b.dependency("libxlsxwriter", .{
+            .target = cross_target,
+            .optimize = optimize,
+            .USE_SYSTEM_MINIZIP = true,
+        });
+        const libxlsxwriter_cross = libxlsxwriter_dep_cross.artifact("xlsxwriter");
         const cross_exe = b.addExecutable(.{
             .name = "convertsie",
             .root_module = b.createModule(.{
@@ -136,6 +160,7 @@ pub fn build(b: *std.Build) void {
             }),
         });
         cross_exe.root_module.linkLibrary(hdf5_cross);
+        cross_exe.root_module.linkLibrary(libxlsxwriter_cross);
         cross_exe.root_module.link_libc = true;
         const dest_subdir = @tagName(platform.os) ++ "-" ++ @tagName(platform.arch);
         const cross_install = b.addInstallArtifact(cross_exe, .{
@@ -161,6 +186,7 @@ pub fn build(b: *std.Build) void {
     });
     lib_test_mod.addImport("libsie", libsie_mod);
     lib_test_mod.linkLibrary(hdf5_native);
+    lib_test_mod.linkLibrary(libxlsxwriter_native);
     lib_test_mod.link_libc = true;
 
     const lib_tests = b.addTest(.{ .root_module = lib_test_mod });
@@ -176,6 +202,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     exe_test_mod.linkLibrary(hdf5_native);
+    exe_test_mod.linkLibrary(libxlsxwriter_native);
     exe_test_mod.link_libc = true;
 
     const exe_tests = b.addTest(.{ .root_module = exe_test_mod });

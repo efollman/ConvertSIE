@@ -4,8 +4,8 @@ const libsie = @import("libsie");
 const hdf5 = @import("hdf5.zig");
 const common = @import("common.zig");
 
-const SieFile = libsie.sie_file.SieFile;
-const Tag = libsie.tag.Tag;
+const SieFile = libsie.SieFile;
+const Tag = libsie.Tag;
 
 // ---------------------------------------------------------------------------
 // Per-channel dataset tracking (maps structure pass → data pass)
@@ -63,34 +63,34 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
 
     // ====================== Structure Pass =================================
     // File-level tags → root attributes
-    try writeTags(allocator, h5.id, sf.getFileTags());
+    try writeTags(allocator, h5.id, sf.fileTags());
 
-    const tests = sf.getTests();
+    const tests = sf.tests();
     for (tests) |*test_obj| {
         // --- Test group ---
-        const tname = try groupName(allocator, test_obj.getName(), test_obj.getId(), "test");
+        const tname = try groupName(allocator, test_obj.name, test_obj.id, "test");
         defer allocator.free(tname);
 
         const test_grp = try h5.createGroup(tname);
         defer test_grp.close();
 
-        try writeTags(allocator, test_grp.id, test_obj.getTags());
+        try writeTags(allocator, test_grp.id, test_obj.tags());
 
         // --- Channels in this test ---
-        const channels = test_obj.getChannels();
+        const channels = test_obj.channels();
         for (channels) |*ch| {
-            const cname = try groupName(allocator, ch.getName(), ch.getId(), "ch");
+            const cname = try groupName(allocator, ch.name, ch.id, "ch");
             defer allocator.free(cname);
 
             const ch_grp = try test_grp.createGroup(cname);
             defer ch_grp.close();
 
-            try writeTags(allocator, ch_grp.id, ch.getTags());
+            try writeTags(allocator, ch_grp.id, ch.tags());
 
             // --- Dimensions → chunked datasets ---
             var entry = ChannelEntry{ .dim_datasets = .empty };
 
-            const ch_tags = ch.getTags();
+            const ch_tags = ch.tags();
             const raw_can_keys_fmt = [_][]const u8{ "somat:data_format", "data_type" };
             for (raw_can_keys_fmt) |key| {
                 if (common.findTag(ch_tags, &[_][]const u8{key})) |v| {
@@ -101,7 +101,7 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
                 }
             }
 
-            const dims = ch.getDimensions();
+            const dims = ch.dimensions();
             for (dims, 0..) |*dim, di| {
                 // For raw CAN, only create a float64 dataset for dim 0 (time);
                 // dim 1 (raw bytes) gets dedicated byte datasets created below.
@@ -109,10 +109,10 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
                 var buf: [64]u8 = undefined;
                 const dset_name = std.fmt.bufPrintZ(&buf, "dim{d}", .{di}) catch "dim";
                 const ds = try hdf5.ChunkedDataset.create(ch_grp.id, dset_name, hdf5.CHUNK_ROWS);
-                const dim_name_z = try allocator.dupeZ(u8, dim.getName());
+                const dim_name_z = try allocator.dupeZ(u8, dim.name);
                 defer allocator.free(dim_name_z);
                 hdf5.writeStringAttr(ds.id, "name", dim_name_z) catch {};
-                try writeTags(allocator, ds.id, dim.getTags());
+                try writeTags(allocator, ds.id, dim.tags());
                 try entry.dim_datasets.append(allocator, ds);
             }
 
@@ -131,9 +131,9 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
 
     // ====================== Data Pass ======================================
     var ch_idx: usize = 0;
-    const tests2 = sf.getTests();
+    const tests2 = sf.tests();
     for (tests2) |*test_obj| {
-        const channels = test_obj.getChannels();
+        const channels = test_obj.channels();
         for (channels) |*ch| {
             defer ch_idx += 1;
             if (ch_idx >= entries.items.len) continue;
@@ -155,7 +155,7 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
                     if (entry.raw_bytes_ds != null) {
                         var pad: [CAN_FRAME_SIZE]u8 = [_]u8{0} ** CAN_FRAME_SIZE;
                         for (0..out.num_rows) |row| {
-                            if (out.getRaw(1, row)) |raw| {
+                            if (out.raw(1, row)) |raw| {
                                 const size: usize = @intCast(raw.size);
                                 const copy_len = @min(size, CAN_FRAME_SIZE);
                                 @memcpy(pad[0..copy_len], raw.ptr[0..copy_len]);
@@ -215,14 +215,14 @@ fn writeTags(allocator: std.mem.Allocator, loc_id: hdf5.hid_t, tags: []const Tag
 }
 
 fn writeOneTag(allocator: std.mem.Allocator, loc_id: hdf5.hid_t, t: *const Tag) !void {
-    const key = t.getId();
+    const key = t.key;
     if (key.len == 0) return;
 
     const key_z = try allocator.dupeZ(u8, key);
     defer allocator.free(key_z);
 
     if (t.isString()) {
-        const val = t.getString() orelse "";
+        const val = t.string() orelse "";
         const val_z = try allocator.dupeZ(u8, val);
         defer allocator.free(val_z);
         try hdf5.writeStringAttr(loc_id, key_z, val_z);

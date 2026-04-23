@@ -15,8 +15,8 @@
 const std = @import("std");
 const libsie = @import("libsie");
 
-const SieFile = libsie.sie_file.SieFile;
-const Tag = libsie.tag.Tag;
+const SieFile = libsie.SieFile;
+const Tag = libsie.Tag;
 
 const MAX_DATA: usize = 8;
 
@@ -37,11 +37,11 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
     var can_channels: std.ArrayList(struct { test_i: usize, ch_i: usize, ch_no: u8 }) = .empty;
     defer can_channels.deinit(allocator);
 
-    const tests = sf.getTests();
+    const tests = sf.tests();
     for (tests, 0..) |*test_obj, ti| {
-        const channels = test_obj.getChannels();
+        const channels = test_obj.channels();
         for (channels, 0..) |*ch, ci| {
-            if (!isCanChannel(ch.getTags())) continue;
+            if (!isCanChannel(ch.tags())) continue;
             const next_no: u8 = @intCast(can_channels.items.len + 1);
             try can_channels.append(allocator, .{ .test_i = ti, .ch_i = ci, .ch_no = next_no });
         }
@@ -54,15 +54,15 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
 
     for (can_channels.items) |entry| {
         const test_obj = &tests[entry.test_i];
-        const ch = &test_obj.getChannels()[entry.ch_i];
+        const ch = &test_obj.channels()[entry.ch_i];
 
         var spig = sf.attachSpigot(ch) catch continue;
         defer spig.deinit();
 
         while (try spig.get()) |out| {
             for (0..out.num_rows) |row| {
-                const ts = out.getFloat64(0, row) orelse continue;
-                const raw = out.getRaw(1, row) orelse continue;
+                const ts = out.float64(0, row) orelse continue;
+                const raw = out.raw(1, row) orelse continue;
                 const size: usize = @intCast(raw.size);
                 if (size < 4) continue; // Need at least the ID
                 const bytes = raw.ptr[0..size];
@@ -105,7 +105,7 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
 
     // Header: pull start_time from file or first test, fall back to "now".
     var date_buf: [64]u8 = undefined;
-    const date_str = formatHeaderDate(&date_buf, sf.getFileTags(), tests);
+    const date_str = formatHeaderDate(&date_buf, sf.fileTags(), tests);
     try w.print("date {s}\n", .{date_str});
     try w.print("base hex  timestamps absolute\n", .{});
     try w.print("internal events logged\n", .{});
@@ -143,9 +143,9 @@ fn lessThanByTs(_: void, a: Frame, b: Frame) bool {
 
 fn isCanChannel(tags: []const Tag) bool {
     for (tags) |*tag| {
-        const id = tag.getId();
+        const id = tag.key;
         if (std.mem.eql(u8, id, "data_type") or std.mem.eql(u8, id, "somat:data_format")) {
-            const v = tag.getString() orelse continue;
+            const v = tag.string() orelse continue;
             if (std.mem.eql(u8, v, "message_can")) return true;
         }
     }
@@ -154,7 +154,7 @@ fn isCanChannel(tags: []const Tag) bool {
 
 fn findTag(tags: []const Tag, key: []const u8) ?[]const u8 {
     for (tags) |*tag| {
-        if (std.mem.eql(u8, tag.getId(), key)) return tag.getString();
+        if (std.mem.eql(u8, tag.key, key)) return tag.string();
     }
     return null;
 }
@@ -171,7 +171,7 @@ fn formatHeaderDate(buf: []u8, file_tags: []const Tag, tests: []const libsie.Tes
     };
     if (iso == null) {
         for (tests) |*t| {
-            for (time_keys) |k| if (findTag(t.getTags(), k)) |v| {
+            for (time_keys) |k| if (findTag(t.tags(), k)) |v| {
                 iso = v;
                 break;
             };

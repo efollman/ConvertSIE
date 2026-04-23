@@ -2,8 +2,8 @@
 const std = @import("std");
 const libsie = @import("libsie");
 
-const SieFile = libsie.sie_file.SieFile;
-const Tag = libsie.tag.Tag;
+const SieFile = libsie.SieFile;
+const Tag = libsie.Tag;
 
 pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_path: [:0]const u8) !void {
     var sf = try SieFile.open(allocator, input_path);
@@ -19,7 +19,7 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
     try w.interface.print("File: {s}\n\n", .{input_path});
 
     // ── File-level tags ───────────────────────────────────────────────────
-    const file_tags = sf.getFileTags();
+    const file_tags = sf.fileTags();
     if (file_tags.len > 0) {
         try w.interface.print("File tags:\n", .{});
         for (file_tags) |*tag| try writeTag(&w.interface, tag, "  ");
@@ -27,26 +27,26 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
     }
 
     // ── Tests / channels / dimensions ─────────────────────────────────────
-    const tests = sf.getTests();
+    const tests = sf.tests();
     try w.interface.print("Tests: {d}\n", .{tests.len});
 
     for (tests) |*test_obj| {
-        try w.interface.print("\n  Test id {d}: '{s}'\n", .{ test_obj.getId(), test_obj.getName() });
+        try w.interface.print("\n  Test id {d}: '{s}'\n", .{ test_obj.id, test_obj.name });
 
-        const test_tags = test_obj.getTags();
+        const test_tags = test_obj.tags();
         for (test_tags) |*tag| try writeTag(&w.interface, tag, "    ");
 
-        const channels = test_obj.getChannels();
+        const channels = test_obj.channels();
         try w.interface.print("    Channels: {d}\n", .{channels.len});
 
         for (channels) |*ch| {
-            try w.interface.print("\n    Channel id {d}, '{s}':\n", .{ ch.getId(), ch.getName() });
+            try w.interface.print("\n    Channel id {d}, '{s}':\n", .{ ch.id, ch.name });
 
-            for (ch.getTags()) |*tag| try writeTag(&w.interface, tag, "      ");
+            for (ch.tags()) |*tag| try writeTag(&w.interface, tag, "      ");
 
-            for (ch.getDimensions()) |*dim| {
-                try w.interface.print("      Dimension {d}: '{s}'\n", .{ dim.getIndex(), dim.getName() });
-                for (dim.getTags()) |*tag| try writeTag(&w.interface, tag, "        ");
+            for (ch.dimensions()) |*dim| {
+                try w.interface.print("      Dimension {d}: '{s}'\n", .{ dim.index, dim.name });
+                for (dim.tags()) |*tag| try writeTag(&w.interface, tag, "        ");
             }
         }
     }
@@ -55,9 +55,9 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
     try w.interface.print("\n--- Channel Data ---\n\n", .{});
 
     for (tests) |*test_obj| {
-        const channels = test_obj.getChannels();
+        const channels = test_obj.channels();
         for (channels) |*ch| {
-            try w.interface.print("Channel {d} '{s}'\n", .{ ch.getId(), ch.getName() });
+            try w.interface.print("Channel {d} '{s}'\n", .{ ch.id, ch.name });
 
             var spig = sf.attachSpigot(ch) catch continue;
             defer spig.deinit();
@@ -66,9 +66,13 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
                 for (0..out.num_rows) |row| {
                     for (0..out.num_dims) |dim| {
                         if (dim != 0) try w.interface.print("\t", .{});
-                        if (out.getFloat64(dim, row)) |val| {
-                            try w.interface.print("{d}", .{val});
-                        } else if (out.getRaw(dim, row)) |raw| {
+                        if (out.float64(dim, row)) |val| {
+                            // SIE samples typically originate as f32; print at f32
+                            // precision so shortest-round-trip strips spurious f64
+                            // noise digits like "0.019999999552965164" → "0.02".
+                            const f32_val: f32 = @floatCast(val);
+                            try w.interface.print("{d}", .{f32_val});
+                        } else if (out.raw(dim, row)) |raw| {
                             const size: usize = @intCast(raw.size);
                             try w.interface.print("0x", .{});
                             for (raw.ptr[0..size]) |byte| {
@@ -86,15 +90,15 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
 }
 
 fn writeTag(iface: *std.Io.Writer, tag: *const Tag, prefix: []const u8) !void {
-    const name = tag.getId();
+    const name = tag.key;
     if (tag.isString()) {
-        const value = tag.getString() orelse "";
+        const value = tag.string() orelse "";
         if (value.len > 80) {
             try iface.print("{s}'{s}': ({d} bytes)\n", .{ prefix, name, value.len });
         } else {
             try iface.print("{s}'{s}': '{s}'\n", .{ prefix, name, value });
         }
     } else {
-        try iface.print("{s}'{s}': binary ({d} bytes)\n", .{ prefix, name, tag.getValueSize() });
+        try iface.print("{s}'{s}': binary ({d} bytes)\n", .{ prefix, name, tag.valueSize() });
     }
 }

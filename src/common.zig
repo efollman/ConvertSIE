@@ -2,16 +2,27 @@
 const std = @import("std");
 const libsie = @import("libsie");
 
-const SieFile = libsie.sie_file.SieFile;
-const Tag = libsie.tag.Tag;
+const SieFile = libsie.SieFile;
+const Tag = libsie.Tag;
 
 /// All data extracted from a SIE file, ready for tabular export.
 pub const ExportData = struct {
     allocator: std.mem.Allocator,
     test_name: []const u8,
     start_time: []const u8,
+    /// File-level + test-level metadata, displayed as a key/value table at the
+    /// top of CSV / XLSX exports. Each entry produces one row: column A = key,
+    /// column B = value. Always includes "Test Name" and "Start Time" (when
+    /// available) followed by all other file_tags and test_tags, deduplicated
+    /// by key (first occurrence wins).
+    meta_pairs: std.ArrayList(MetaPair),
     channels: std.ArrayList(Channel),
     groups: std.ArrayList(ChannelGroup),
+
+    pub const MetaPair = struct {
+        key: []const u8,
+        value: []const u8,
+    };
 
     pub const Channel = struct {
         name: []const u8,
@@ -46,6 +57,7 @@ pub const ExportData = struct {
             .allocator = allocator,
             .test_name = "",
             .start_time = "",
+            .meta_pairs = .empty,
             .channels = .empty,
             .groups = .empty,
         };
@@ -55,6 +67,11 @@ pub const ExportData = struct {
         const a = self.allocator;
         if (self.test_name.len > 0) a.free(self.test_name);
         if (self.start_time.len > 0) a.free(self.start_time);
+        for (self.meta_pairs.items) |p| {
+            a.free(p.key);
+            a.free(p.value);
+        }
+        self.meta_pairs.deinit(a);
         for (self.channels.items) |*ch| {
             if (ch.name.len > 0) a.free(ch.name);
             if (ch.units.len > 0) a.free(ch.units);
@@ -80,8 +97,9 @@ pub const ExportData = struct {
     }
 
     /// Total number of CSV/XLSX columns in grouped layout (with blank separators).
+    /// Includes the leading row-label column (column A).
     pub fn totalColumns(self: *const ExportData) usize {
-        var cols: usize = 0;
+        var cols: usize = 1; // column A reserved for row labels (Channel/Units/...)
         for (self.groups.items, 0..) |*grp, gi| {
             if (gi > 0) cols += 1; // blank separator between groups
             if (grp.is_timeseries) {
@@ -145,7 +163,7 @@ pub fn readSieFile(allocator: std.mem.Allocator, input_path: [:0]const u8) !Expo
     errdefer data.deinit();
 
     // --- File / test level metadata ---
-    const file_tags = sf.getFileTags();
+    const file_tags = sf.fileTags();
     const name_keys = [_][]const u8{ "SIE:TCE_SetupName", "name", "Name", "TestName" };
     if (findTag(file_tags, &name_keys)) |name| {
         data.test_name = try allocator.dupe(u8, name);
@@ -155,20 +173,40 @@ pub fn readSieFile(allocator: std.mem.Allocator, input_path: [:0]const u8) !Expo
         data.start_time = try allocator.dupe(u8, t);
     }
 
-    const tests = sf.getTests();
+    const tests = sf.tests();
     if (data.test_name.len == 0 and tests.len > 0) {
-        const tn = tests[0].getName();
+        const tn = tests[0].name;
         if (tn.len > 0) data.test_name = try allocator.dupe(u8, tn);
     }
     if (data.start_time.len == 0 and tests.len > 0) {
-        if (findTag(tests[0].getTags(), &time_keys)) |t| {
+        if (findTag(tests[0].tags(), &time_keys)) |t| {
             data.start_time = try allocator.dupe(u8, t);
+        }
+    }
+
+    // Build meta_pairs: Test Name + Start Time + all file/test tags (deduped by key).
+    if (data.test_name.len > 0) {
+        try appendMetaPair(allocator, &data.meta_pairs, "Test Name", data.test_name);
+    }
+    if (data.start_time.len > 0) {
+        try appendMetaPair(allocator, &data.meta_pairs, "Start Time", data.start_time);
+    }
+    for (file_tags) |*tag| {
+        const v = tag.string() orelse continue;
+        if (tag.key.len == 0 or v.len == 0) continue;
+        try appendMetaPair(allocator, &data.meta_pairs, tag.key, v);
+    }
+    if (tests.len > 0) {
+        for (tests[0].tags()) |*tag| {
+            const v = tag.string() orelse continue;
+            if (tag.key.len == 0 or v.len == 0) continue;
+            try appendMetaPair(allocator, &data.meta_pairs, tag.key, v);
         }
     }
 
     // --- Read all channels across all tests ---
     for (tests) |*test_obj| {
-        const channels = test_obj.getChannels();
+        const channels = test_obj.channels();
         for (channels) |*ch| {
             var channel = ExportData.Channel{
                 .name = "",
@@ -185,10 +223,10 @@ pub fn readSieFile(allocator: std.mem.Allocator, input_path: [:0]const u8) !Expo
             };
 
             // Channel name
-            const cn = ch.getName();
+            const cn = ch.name;
             if (cn.len > 0) channel.name = try allocator.dupe(u8, cn);
 
-            const ch_tags = ch.getTags();
+            const ch_tags = ch.tags();
 
             // Sample rate (new format: core:sample_rate; old format: absent)
             const rate_keys = [_][]const u8{ "core:sample_rate", "sample_rate", "SampleRate", "rate", "Rate", "SIE:sample_rate" };
@@ -213,12 +251,12 @@ pub fn readSieFile(allocator: std.mem.Allocator, input_path: [:0]const u8) !Expo
             }
 
             // Dimensions: names, units, data arrays
-            const dims = ch.getDimensions();
+            const dims = ch.dimensions();
             for (dims) |*dim| {
                 // Prefer getName(), fall back to core:label tag
-                const dn = dim.getName();
+                const dn = dim.name;
                 const label_keys = [_][]const u8{"core:label"};
-                const name_str = if (dn.len > 0) dn else (findTag(dim.getTags(), &label_keys) orelse "");
+                const name_str = if (dn.len > 0) dn else (findTag(dim.tags(), &label_keys) orelse "");
                 try channel.dim_names.append(allocator, try allocator.dupe(u8, name_str));
                 try channel.dim_data.append(allocator, .empty);
             }
@@ -227,7 +265,7 @@ pub fn readSieFile(allocator: std.mem.Allocator, input_path: [:0]const u8) !Expo
             if (dims.len > 0) {
                 const unit_idx: usize = if (dims.len > 1) 1 else 0;
                 const unit_keys = [_][]const u8{ "core:units", "SIE:units", "units", "Units", "eng_units" };
-                if (findTag(dims[unit_idx].getTags(), &unit_keys)) |u| {
+                if (findTag(dims[unit_idx].tags(), &unit_keys)) |u| {
                     channel.units = try allocator.dupe(u8, u);
                 }
             }
@@ -240,8 +278,8 @@ pub fn readSieFile(allocator: std.mem.Allocator, input_path: [:0]const u8) !Expo
             }
             // Detect timeseries from dim 0 tags (new format: core:units=Seconds or core:label=Time)
             if (!channel.is_timeseries and dims.len >= 2) {
-                const d0_units = findTag(dims[0].getTags(), &[_][]const u8{"core:units"}) orelse "";
-                const d0_label = findTag(dims[0].getTags(), &[_][]const u8{"core:label"}) orelse "";
+                const d0_units = findTag(dims[0].tags(), &[_][]const u8{"core:units"}) orelse "";
+                const d0_label = findTag(dims[0].tags(), &[_][]const u8{"core:label"}) orelse "";
                 if (std.ascii.eqlIgnoreCase(d0_units, "seconds") or
                     std.ascii.eqlIgnoreCase(d0_units, "s") or
                     std.ascii.eqlIgnoreCase(d0_label, "time"))
@@ -253,11 +291,11 @@ pub fn readSieFile(allocator: std.mem.Allocator, input_path: [:0]const u8) !Expo
             // Build time_label: "{label} ({units_abbrev})", fallback "Time (S)"
             {
                 const lbl = if (dims.len > 0)
-                    (findTag(dims[0].getTags(), &[_][]const u8{"core:label"}) orelse "Time")
+                    (findTag(dims[0].tags(), &[_][]const u8{"core:label"}) orelse "Time")
                 else
                     "Time";
                 const u_raw = if (dims.len > 0)
-                    (findTag(dims[0].getTags(), &[_][]const u8{"core:units"}) orelse "S")
+                    (findTag(dims[0].tags(), &[_][]const u8{"core:units"}) orelse "S")
                 else
                     "S";
                 // Abbreviate "Seconds" -> "S"
@@ -274,7 +312,7 @@ pub fn readSieFile(allocator: std.mem.Allocator, input_path: [:0]const u8) !Expo
                     for (0..out.num_dims) |d| {
                         if (channel.is_raw_can and d == 1) {
                             // Raw CAN dim: store as hex string
-                            if (out.getRaw(d, row)) |raw| {
+                            if (out.raw(d, row)) |raw| {
                                 const size: usize = @intCast(raw.size);
                                 const hex_str = try fmtHex(allocator, raw.ptr[0..size]);
                                 try channel.raw_can_hex.append(allocator, hex_str);
@@ -283,7 +321,7 @@ pub fn readSieFile(allocator: std.mem.Allocator, input_path: [:0]const u8) !Expo
                             }
                         } else {
                             if (d < channel.dim_data.items.len) {
-                                if (out.getFloat64(d, row)) |val| {
+                                if (out.float64(d, row)) |val| {
                                     try channel.dim_data.items[d].append(allocator, val);
                                 }
                             }
@@ -319,13 +357,31 @@ fn fmtHex(allocator: std.mem.Allocator, bytes: []const u8) ![]const u8 {
     return out;
 }
 
+/// Append a (key, value) pair to the meta_pairs list, but only if `key` isn't
+/// already present (case-sensitive). Both strings are duplicated into the
+/// allocator and freed by ExportData.deinit().
+fn appendMetaPair(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList(ExportData.MetaPair),
+    key: []const u8,
+    value: []const u8,
+) !void {
+    for (list.items) |p| {
+        if (std.mem.eql(u8, p.key, key)) return;
+    }
+    try list.append(allocator, .{
+        .key = try allocator.dupe(u8, key),
+        .value = try allocator.dupe(u8, value),
+    });
+}
+
 /// Search a tag slice for the first tag whose id matches any of the given keys.
 pub fn findTag(tags: []const Tag, keys: []const []const u8) ?[]const u8 {
     for (tags) |*tag| {
-        const id = tag.getId();
+        const id = tag.key;
         for (keys) |key| {
             if (std.mem.eql(u8, id, key)) {
-                return tag.getString();
+                return tag.string();
             }
         }
     }

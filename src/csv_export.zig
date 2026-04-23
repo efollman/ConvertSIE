@@ -13,9 +13,10 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
     var w = out_file.writer(&write_buf);
     const wr = &w.interface;
 
-    // ── File metadata ─────────────────────────────────────────────────────
-    try wr.print("Test Name: {s}\n", .{data.test_name});
-    try wr.print("Start Time: {s}\n", .{data.start_time});
+    // ── File / test metadata (key in column A, value in column B) ─────────
+    for (data.meta_pairs.items) |p| {
+        try wr.print("{s},{s}\n", .{ csvEscape(p.key), csvEscape(p.value) });
+    }
     try wr.print("\n", .{});
 
     if (data.groups.items.len == 0) {
@@ -35,8 +36,10 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
     // ── Data rows ─────────────────────────────────────────────────────────
     const max_rows = data.maxRows();
     for (0..max_rows) |row| {
+        // Column A is reserved for row labels; data rows have an empty label.
+        try wr.print(",", .{});
         for (data.groups.items, 0..) |*grp, gi| {
-            if (gi > 0) try wr.print(",", .{}); // blank separator column
+            if (gi > 0) try wr.print(",,", .{}); // blank separator column
 
             if (grp.is_timeseries) {
                 // Shared time from first channel's dim 0
@@ -85,9 +88,19 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
 
 const MetaField = enum { name, units, rate };
 
+fn metaLabel(field: MetaField) []const u8 {
+    return switch (field) {
+        .name => "Channel",
+        .units => "Units",
+        .rate => "Sample Rate",
+    };
+}
+
 fn writeMetaRow(wr: *std.Io.Writer, data: *const common.ExportData, field: MetaField) !void {
+    // Column A: row label.
+    try wr.print("{s},", .{metaLabel(field)});
     for (data.groups.items, 0..) |*grp, gi| {
-        if (gi > 0) try wr.print(",", .{}); // blank separator
+        if (gi > 0) try wr.print(",,", .{}); // blank separator column
 
         if (grp.is_timeseries) {
             try wr.print(",", .{}); // blank for shared time column
@@ -118,8 +131,10 @@ fn writeMetaRow(wr: *std.Io.Writer, data: *const common.ExportData, field: MetaF
 }
 
 fn writeDimRow(wr: *std.Io.Writer, data: *const common.ExportData) !void {
+    // Column A: row label.
+    try wr.print("Dimension,", .{});
     for (data.groups.items, 0..) |*grp, gi| {
-        if (gi > 0) try wr.print(",", .{});
+        if (gi > 0) try wr.print(",,", .{}); // blank separator column
 
         if (grp.is_timeseries) {
             const first_ch = &data.channels.items[grp.channel_indices.items[0]];

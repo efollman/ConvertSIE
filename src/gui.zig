@@ -906,18 +906,40 @@ fn formatExportWorker(job: *FormatExportJob) void {
     job.task.done.store(true, .release);
 }
 
+/// Extract the stem (filename without directory and without final extension) from a path.
+fn pathStem(path: []const u8) []const u8 {
+    const sep_idx = std.mem.lastIndexOfAny(u8, path, "/\\") orelse 0;
+    const filename = if (sep_idx > 0) path[sep_idx + 1 ..] else path;
+    const dot_idx = std.mem.lastIndexOfScalar(u8, filename, '.') orelse filename.len;
+    return filename[0..dot_idx];
+}
+
 /// Build an output path: out_dir/<prefix><stem><ext>, where ext / prefix are
 /// selected by format_idx (see FORMAT_EXTS / FORMAT_PREFIX). Prefixes keep
 /// CAN-only outputs from colliding with the basic CSV / ASCII exports.
-fn buildOutPath(allocator: std.mem.Allocator, in_path: []const u8, out_dir: []const u8, format_idx: usize) ?[]u8 {
-    const sep_idx = std.mem.lastIndexOfAny(u8, in_path, "/\\") orelse 0;
-    const filename = if (sep_idx > 0) in_path[sep_idx + 1 ..] else in_path;
-    const dot_idx = std.mem.lastIndexOfScalar(u8, filename, '.') orelse filename.len;
-    const stem = filename[0..dot_idx];
+///
+/// When multiple input files in the queue share the same stem (e.g. the same
+/// filename from different directories), an `_N` suffix is appended to the
+/// stem of the 2nd, 3rd, ... occurrence so exports don't overwrite each other.
+fn buildOutPath(app: *const AppState, file_idx: usize, out_dir: []const u8, format_idx: usize) ?[]u8 {
+    const allocator = app.allocator;
+    const in_path = app.files.items[file_idx].in_path;
+    const stem = pathStem(in_path);
     const ext = FORMAT_EXTS[format_idx];
     const dir = std.mem.trimRight(u8, out_dir, "/\\");
     const prefix = FORMAT_PREFIX[format_idx];
-    return std.fmt.allocPrint(allocator, "{s}\\{s}{s}{s}", .{ dir, prefix, stem, ext }) catch null;
+
+    // Count earlier files in the queue with the same stem (case-insensitive).
+    var dup_index: usize = 0;
+    for (app.files.items[0..file_idx]) |*prev| {
+        const prev_stem = pathStem(prev.in_path);
+        if (std.ascii.eqlIgnoreCase(prev_stem, stem)) dup_index += 1;
+    }
+
+    if (dup_index == 0) {
+        return std.fmt.allocPrint(allocator, "{s}\\{s}{s}{s}", .{ dir, prefix, stem, ext }) catch null;
+    }
+    return std.fmt.allocPrint(allocator, "{s}\\{s}{s}_{d}{s}", .{ dir, prefix, stem, dup_index + 1, ext }) catch null;
 }
 
 fn startFormatExport(app: *AppState, f: *FileItem, format_idx: usize) void {
@@ -925,8 +947,15 @@ fn startFormatExport(app: *AppState, f: *FileItem, format_idx: usize) void {
     const out_dir = app.out_dir_buf[0..app.outDirLen()];
     if (out_dir.len == 0) return;
 
+    // Recover the queue index of `f` so buildOutPath can dedup against earlier files.
+    const base_ptr = @intFromPtr(app.files.items.ptr);
+    const f_ptr = @intFromPtr(f);
+    if (f_ptr < base_ptr) return;
+    const file_idx = (f_ptr - base_ptr) / @sizeOf(FileItem);
+    if (file_idx >= app.files.items.len) return;
+
     const t = &f.tasks[format_idx];
-    const out_path = buildOutPath(app.allocator, f.in_path, out_dir, format_idx) orelse return;
+    const out_path = buildOutPath(app, file_idx, out_dir, format_idx) orelse return;
 
     t.state = .running;
     t.anim_frame = 0;

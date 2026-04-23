@@ -11,8 +11,8 @@ const std = @import("std");
 const libsie = @import("libsie");
 const can_err = @import("can_err.zig");
 
-const SieFile = libsie.sie_file.SieFile;
-const Tag = libsie.tag.Tag;
+const SieFile = libsie.SieFile;
+const Tag = libsie.Tag;
 
 pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_path: [:0]const u8) !void {
     var sf = try SieFile.open(allocator, input_path);
@@ -28,11 +28,11 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
         channel_results.deinit(allocator);
     }
 
-    const tests = sf.getTests();
+    const tests = sf.tests();
     for (tests) |*test_obj| {
-        const channels = test_obj.getChannels();
+        const channels = test_obj.channels();
         for (channels) |*ch| {
-            if (!isCanChannel(ch.getTags())) continue;
+            if (!isCanChannel(ch.tags())) continue;
 
             // Stream the channel's (time, raw CAN frame) rows into two lists.
             var times: std.ArrayList(f64) = .empty;
@@ -48,8 +48,8 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
 
             while (try spig.get()) |out| {
                 for (0..out.num_rows) |row| {
-                    const ts = out.getFloat64(0, row) orelse continue;
-                    const raw = out.getRaw(1, row) orelse continue;
+                    const ts = out.float64(0, row) orelse continue;
+                    const raw = out.raw(1, row) orelse continue;
                     const size: usize = @intCast(raw.size);
                     const copied = try allocator.dupe(u8, raw.ptr[0..size]);
                     try times.append(allocator, ts);
@@ -65,7 +65,7 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
             const records = can_err.canErrFindr(allocator, times.items, raw_slices, null) catch continue;
             errdefer allocator.free(records);
 
-            const name = try allocator.dupe(u8, ch.getName());
+            const name = try allocator.dupe(u8, ch.name);
             errdefer allocator.free(name);
 
             try channel_results.append(allocator, .{ .name = name, .records = records });
@@ -91,9 +91,9 @@ pub fn convert(allocator: std.mem.Allocator, input_path: [:0]const u8, output_pa
 
 fn isCanChannel(tags: []const Tag) bool {
     for (tags) |*tag| {
-        const id = tag.getId();
+        const id = tag.key;
         if (std.mem.eql(u8, id, "data_type") or std.mem.eql(u8, id, "somat:data_format")) {
-            const v = tag.getString() orelse continue;
+            const v = tag.string() orelse continue;
             if (std.mem.eql(u8, v, "message_can")) return true;
         }
     }
